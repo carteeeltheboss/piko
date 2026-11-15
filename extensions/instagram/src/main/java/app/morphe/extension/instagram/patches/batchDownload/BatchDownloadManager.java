@@ -28,16 +28,19 @@ import com.instagram.common.session.UserSession;
 public final class BatchDownloadManager {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Map<View, Screen> SCREENS = new WeakHashMap<>();
-    private static final Map<View, Cell> CELLS = new WeakHashMap<>();
+    private static final Map<View, WeakReference<Cell>> CELLS = new WeakHashMap<>();
     private static final Map<View, Object> BOUND = new WeakHashMap<>();
     private static final View.OnAttachStateChangeListener ATTACH = new View.OnAttachStateChangeListener() {
         public void onViewAttachedToWindow(View view) { render(view, BOUND.get(view)); }
         public void onViewDetachedFromWindow(View view) {
-            Cell cell = CELLS.remove(view);
+            WeakReference<Cell> ref = CELLS.remove(view);
+            Cell cell = ref == null ? null : ref.get();
             if (cell != null) view.getOverlay().remove(cell);
         }
     };
     private static BatchDownloadQueue<MediaData> queue;
+    private static WeakReference<Screen> queueOrigin = new WeakReference<>(null);
+    private static String queueProfileId;
 
     private static final class Screen {
         final SelectionManager<MediaData> selection = new SelectionManager<>();
@@ -48,6 +51,8 @@ public final class BatchDownloadManager {
         Button all, none;
         WeakReference<Object> source;
         int discovery;
+        boolean profile;
+        String profileId;
         final TextView count;
         boolean selecting;
         Screen(View root, UserSession session, LinearLayout bar, Button mode, Button download,
@@ -93,6 +98,12 @@ public final class BatchDownloadManager {
         Button b = new Button(context); b.setText(text); b.setTextSize(12); b.setMinWidth(0); return b;
     }
     public static void attach(View root, UserSession session, Object source) {
+        attachScreen(root, session, source, false);
+    }
+    public static void attachProfile(View root, UserSession session, Object fragment) {
+        attachScreen(root, session, fragment, true);
+    }
+    private static void attachScreen(View root, UserSession session, Object source, boolean profile) {
         try {
             if (!(root instanceof ViewGroup) || session == null || SCREENS.containsKey(root)) return;
             Context context = root.getContext();
@@ -117,7 +128,7 @@ public final class BatchDownloadManager {
             panel.addView(actions); actions.setTag("batchSelectionActions");
             ((FrameLayout) host).addView(panel, params);
             Screen screen = new Screen(root, session, bar, mode, download, cancel, retry, count);
-            screen.source = new WeakReference<>(source); screen.all = all; screen.none = none;
+            screen.source = new WeakReference<>(source); screen.profile = profile; screen.all = all; screen.none = none;
             SCREENS.put(root, screen);
             all.setOnClickListener(v -> selectLoaded(screen));
             none.setOnClickListener(v -> { screen.discovery++; screen.selection.clear(); refresh(screen); });
@@ -129,13 +140,19 @@ public final class BatchDownloadManager {
                                 completed.computeIfAbsent(post, ignored -> new java.util.HashSet<>())));
             }
             mode.setOnClickListener(v -> {
+                checkProfile(screen);
                 screen.selecting = !screen.selecting;
                 if (!screen.selecting) { screen.discovery++; screen.selection.clear(); }
                 refresh(screen);
             });
-            download.setOnClickListener(v -> start(screen, screen.selection.snapshot()));
+            download.setOnClickListener(v -> { checkProfile(screen); start(screen, screen.selection.snapshot()); });
             cancel.setOnClickListener(v -> queue.cancel());
-            retry.setOnClickListener(v -> start(screen, queue.failedItems()));
+            retry.setOnClickListener(v -> {
+                checkProfile(screen);
+                if (queueOrigin.get() == screen && java.util.Objects.equals(queueProfileId, screen.profileId)) {
+                    start(screen, queue.failedItems());
+                }
+            });
             refresh(screen);
             for (Map.Entry<View, Object> entry : BOUND.entrySet()) render(entry.getKey(), entry.getValue());
         } catch (Exception | LinkageError e) { Logger.printException(() -> "Saved BD attach failed", e); }
@@ -146,7 +163,9 @@ public final class BatchDownloadManager {
         screen.discovery++; screen.selection.clear(); screen.selecting = false;
         View panel = (View) screen.bar.getParent();
         if (panel != null && panel.getParent() instanceof ViewGroup) ((ViewGroup) panel.getParent()).removeView(panel);
-        for (Cell cell : CELLS.values()) if (cell.screen.get() == screen) cell.update();
+        for (WeakReference<Cell> ref : CELLS.values()) {
+            Cell cell = ref.get(); if (cell != null && cell.screen.get() == screen) cell.update();
+        }
         // An explicitly started batch continues using application context after navigation.
     }
     private static void refresh(Screen screen) {
@@ -157,14 +176,20 @@ public final class BatchDownloadManager {
         screen.download.setVisibility(screen.selecting ? View.VISIBLE : View.GONE);
         screen.download.setEnabled(screen.selection.size() > 0 && !queue.isRunning());
         screen.cancel.setVisibility(queue.isRunning() ? View.VISIBLE : View.GONE);
-        screen.retry.setVisibility(!queue.isRunning() && !queue.failedItems().isEmpty() ? View.VISIBLE : View.GONE);
-        for (Cell cell : CELLS.values()) if (cell.screen.get() == screen) cell.update();
+        screen.retry.setVisibility(!queue.isRunning() && !queue.failedItems().isEmpty()
+                && queueOrigin.get() == screen && java.util.Objects.equals(queueProfileId, screen.profileId)
+                ? View.VISIBLE : View.GONE);
+        for (WeakReference<Cell> ref : CELLS.values()) {
+            Cell cell = ref.get(); if (cell != null && cell.screen.get() == screen) cell.update();
+        }
     }
     private static void selectLoaded(Screen screen) {
         Object source = screen.source.get();
         if (source == null) return;
         try {
-            java.util.List<Object> loaded = LoadedPosts.saved(source, screen.session);
+            checkProfile(screen);
+            java.util.List<Object> loaded = screen.profile
+                    ? LoadedPosts.profile(screen.root.get(), screen.session) : LoadedPosts.saved(source, screen.session);
             int generation = ++screen.discovery;
             addLoaded(screen, loaded, 0, generation);
         } catch (Exception | LinkageError e) {
@@ -197,6 +222,7 @@ public final class BatchDownloadManager {
             }
             if (!running) Utils.showToastLong("BD: " + done + " / " + total + ", " + failed + " failed");
         }))) {
+            queueOrigin = weak; queueProfileId = screen.profileId;
             screen.selection.clear(); refresh(screen);
         }
     }
@@ -206,7 +232,8 @@ public final class BatchDownloadManager {
         if (!BOUND.containsKey(view)) {
             view.addOnAttachStateChangeListener(ATTACH);
             view.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> {
-                Cell cell = CELLS.get(v); if (cell != null) cell.update();
+                WeakReference<Cell> ref = CELLS.get(v);
+                Cell cell = ref == null ? null : ref.get(); if (cell != null) cell.update();
             });
         }
         BOUND.put(view, media);
@@ -215,10 +242,34 @@ public final class BatchDownloadManager {
     }
     private static Screen owner(View view) {
         for (View node = view; node != null;) {
-            Screen screen = SCREENS.get(node); if (screen != null) return screen;
+            Screen screen = SCREENS.get(node); if (screen != null) { checkProfile(screen); return screen; }
             ViewParent parent = node.getParent(); node = parent instanceof View ? (View) parent : null;
         }
         return null;
+    }
+    private static void checkProfile(Screen screen) {
+        if (!screen.profile) return;
+        Object fragment = screen.source.get();
+        if (fragment == null) return;
+        try {
+            String id = LoadedPosts.profileId(fragment);
+            if (screen.profileId != null && !screen.profileId.equals(id)) {
+                screen.discovery++; screen.selection.clear();
+                screen.selecting = false;
+                refresh(screen);
+            }
+            screen.profileId = id;
+        } catch (Exception | LinkageError ignored) {
+            // Profile user data can be absent while an empty/private profile is loading.
+        }
+    }
+    /** Wrap the native listener on every rebind, preserving navigation outside Profile BD. */
+    public static View.OnClickListener profileClick(View view, Object media, View.OnClickListener original) {
+        return clicked -> {
+            Screen screen = owner(view);
+            if (screen != null && screen.profile && screen.selecting && select(view, media)) return;
+            if (original != null) original.onClick(clicked);
+        };
     }
     /** Native Saved-grid click callback; returning true suppresses opening the post. */
     public static boolean select(View view, Object media) {
@@ -237,12 +288,13 @@ public final class BatchDownloadManager {
     private static void render(View view, Object media) {
         try {
             Screen screen = owner(view);
-            Cell previous = CELLS.remove(view);
+            WeakReference<Cell> ref = CELLS.remove(view);
+            Cell previous = ref == null ? null : ref.get();
             if (previous != null) view.getOverlay().remove(previous);
             if (screen == null || media == null) return;
             MediaData post = new MediaData(media, screen.session);
             String id = post.getPostID(); if ("0".equals(id)) return;
-            Cell cell = new Cell(view, screen, id); CELLS.put(view, cell);
+            Cell cell = new Cell(view, screen, id); CELLS.put(view, new WeakReference<>(cell));
             view.getOverlay().add(cell); cell.update();
         } catch (Exception | LinkageError e) { Logger.printException(() -> "Saved BD bind failed", e); }
     }

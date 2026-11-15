@@ -19,7 +19,7 @@ private const val SESSION = "Lcom/instagram/common/session/UserSession;"
 private object SavedFragment : Fingerprint(
     name = "A0B", definingClass = "LX/0RLB;", returnType = "LX/0Czy;", strings = listOf("saveGrid"),
 )
-private object GridBinder : Fingerprint(
+internal object GridBinder : Fingerprint(
     definingClass = "LX/0DNO;", name = "A04", returnType = "V",
     strings = listOf("MediaGridItemViewBinder.bindMediaView"),
 )
@@ -35,13 +35,32 @@ private object SavedClick : Fingerprint(
     parameters = listOf("Landroid/view/View;", "LX/050F;", "LX/0D0U;", "Lcom/instagram/feed/media/Media;"),
 )
 
+// Shared thumbnail binding; selecting either feature installs this exactly once.
+internal val batchGridHooksPatch = patch {
+    compatibleWith(COMPATIBILITY_INSTAGRAM)
+    dependsOn(downloadMediaPatch)
+    execute {
+        GridBinder.method.apply {
+            if (p0Register < 2 || parameterTypes.getOrNull(5) != "Lcom/instagram/feed/media/Media;" ||
+                parameterTypes.getOrNull(8) != "Lcom/instagram/igds/components/imagebutton/IgImageButton;") {
+                throw PatchException("Unexpected Saved thumbnail binder parameters")
+            }
+            addInstructions(0, """
+                move-object/from16 v0, p9
+                move-object/from16 v1, p6
+                invoke-static {v0, v1}, $HOOK->bind(Landroid/view/View;Ljava/lang/Object;)V
+            """.trimIndent())
+        }
+    }
+}
+
 @Suppress("unused")
 val savedPostsBatchDownloadPatch = patch(
     name = "Saved Posts Batch Downloader",
     description = "Adds manual multi-selection and queued full-post downloads to Saved collections.",
 ) {
     compatibleWith(COMPATIBILITY_INSTAGRAM)
-    dependsOn(downloadMediaPatch)
+    dependsOn(batchGridHooksPatch)
     execute {
         val owner = SavedFragment.originalClassDef
         val session = owner.fields.singleOrNull { it.type == SESSION }
@@ -78,16 +97,6 @@ val savedPostsBatchDownloadPatch = patch(
                 return-void
             """.trimIndent(), ExternalLabel("native", getInstruction(0)))
         }
-        GridBinder.method.apply {
-            if (p0Register < 2 || parameterTypes.getOrNull(5) != "Lcom/instagram/feed/media/Media;" ||
-                parameterTypes.getOrNull(8) != "Lcom/instagram/igds/components/imagebutton/IgImageButton;") {
-                throw PatchException("Unexpected Saved thumbnail binder parameters")
-            }
-            addInstructions(0, """
-                move-object/from16 v0, p9
-                move-object/from16 v1, p6
-                invoke-static {v0, v1}, $HOOK->bind(Landroid/view/View;Ljava/lang/Object;)V
-            """.trimIndent())
-        }
+
     }
 }

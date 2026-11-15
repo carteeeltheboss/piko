@@ -21,18 +21,52 @@ public final class LoadedPosts {
         Object source = field(adapter, "A0F");   // Native 0DAr loaded-model provider.
         return models((Iterator<?>) call(source, "A04"), session);
     }
+    public static String profileId(Object fragment) throws Exception {
+        Object user = call(fragment, "A0s");
+        return (String) call(user, "getId");
+    }
+    public static List<Object> profile(android.view.View root, UserSession session) throws Exception {
+        List<Object> loadedModels = new ArrayList<>();
+        collectAdapters(root, Class.forName("X.04Mo"), loadedModels);
+        return models(loadedModels.iterator(), session);
+    }
+    private static void collectAdapters(android.view.View view, Class<?> adapterType, List<Object> models) throws Exception {
+        // getAdapter is the stable RecyclerView API. A0i is 452's native 04Mo model getter.
+        if (isRecyclerView(view.getClass())) {
+            Object adapter = call(view, "getAdapter");
+            if (adapter != null && adapterType.isInstance(adapter)) {
+                int count = (Integer) call(adapter, "getItemCount");
+                Method getItem = adapterType.getMethod("A0i", int.class);
+                for (int i = 0; i < count; i++) models.add(getItem.invoke(adapter, i));
+                return; // Nested carousels inside media holders are not profile posts.
+            }
+        }
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) collectAdapters(group.getChildAt(i), adapterType, models);
+        }
+    }
+    private static boolean isRecyclerView(Class<?> type) {
+        for (Class<?> c = type; c != null; c = c.getSuperclass()) {
+            if ("androidx.recyclerview.widget.RecyclerView".equals(c.getName())) return true;
+        }
+        return false;
+    }
     private static List<Object> models(Iterator<?> iterator, UserSession session) throws Exception {
         List<Object> result = new ArrayList<>();
-        Object resolver = Class.forName("X.01zd").getMethod("A00", UserSession.class).invoke(null, session);
-        Class<?> gridModel = Class.forName("X.0D0U");
-        Class<?> mediaReference = Class.forName("X.022I");
-        Method resolve = mediaReference.getMethod("A00", Class.forName("X.0EAU"));
+        // The native Saved renderer itself checks 0fgo then calls CkC on these
+        // loaded grid models. CMJ is layout metadata, not a media reference.
+        Class<?> mediaModel = Class.forName("X.0fgo");
+        Method mediaGetter = mediaModel.getMethod("CkC");
         while (iterator.hasNext()) {
             Object model = iterator.next();
-            if (!gridModel.isInstance(model)) continue; // Skip headers/footers and loading rows.
-            Object reference = call(model, "CMJ");
-            Object media = resolve.invoke(reference, resolver);
-            if (media != null) result.add(media);
+            if (!mediaModel.isInstance(model)) continue;
+            try {
+                Object media = mediaGetter.invoke(model);
+                if (media != null) result.add(media);
+            } catch (ReflectiveOperationException | LinkageError ignored) {
+                // Unavailable models do not prevent selecting other loaded posts.
+            }
         }
         return result;
     }
