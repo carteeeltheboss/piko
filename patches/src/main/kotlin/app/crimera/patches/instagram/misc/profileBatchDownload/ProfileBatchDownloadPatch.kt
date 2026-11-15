@@ -48,16 +48,15 @@ val profileBatchDownloadPatch = patch(
         }
         ProfileCreated.method.apply {
             if (p0Register < 3) throw PatchException("Profile attach requires three local registers")
-            implementation!!.instructions.withIndex().filter { it.value.opcode == Opcode.RETURN_VOID }
-                .map { it.index }.reversed().forEach { index ->
-                    addInstructions(index, """
-                        invoke-virtual/range {p0 .. p0}, LX/0CTn;->getSession()$SESSION
-                        move-result-object v1
-                        move-object/from16 v0, p1
-                        move-object/from16 v2, p0
-                        invoke-static {v0, v1, v2}, $HOOK->attachProfile(Landroid/view/View;${SESSION}Ljava/lang/Object;)V
-                    """.trimIndent())
-                }
+            // Register at entry: native branches may target RETURN_VOID directly and skip
+            // instructions inserted before that return. Parameters are intact here.
+            addInstructions(0, """
+                invoke-virtual/range {p0 .. p0}, LX/0CTn;->getSession()$SESSION
+                move-result-object v1
+                move-object/from16 v0, p1
+                move-object/from16 v2, p0
+                invoke-static {v0, v1, v2}, $HOOK->attachProfile(Landroid/view/View;${SESSION}Ljava/lang/Object;)V
+            """.trimIndent())
         }
         ProfileConfigureActionBar.method.apply {
             implementation!!.instructions.withIndex().filter { it.value.opcode == Opcode.RETURN_VOID }

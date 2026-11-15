@@ -853,7 +853,7 @@ public class ScreenBuilder {
 
     private void addDownloadQueuePreference() {
         Preference queue = helper.buttonPreference("Download Queue",
-                "BD tools 3 - Live requests, file progress and failures", "piko_download_queue");
+                "BD tools 4 - Live requests, file progress and failures", "piko_download_queue");
         queue.setPersistent(false);
         queue.setOrder(-100);
         queue.setOnPreferenceClickListener(preference -> {

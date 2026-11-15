@@ -29,6 +29,7 @@ public final class BatchDownloadManager {
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Map<View, Screen> SCREENS = new WeakHashMap<>();
     private static final Map<View, WeakReference<Cell>> CELLS = new WeakHashMap<>();
+    private static final Map<View, WeakReference<Screen>> TOOLBAR_SCREENS = new WeakHashMap<>();
     private static final Map<View, Object> BOUND = new WeakHashMap<>();
     private static final View.OnAttachStateChangeListener ATTACH = new View.OnAttachStateChangeListener() {
         public void onViewAttachedToWindow(View view) { render(view, BOUND.get(view)); }
@@ -42,7 +43,7 @@ public final class BatchDownloadManager {
     private static int profileCreatedCalls, toolbarRenderCalls;
     private static String profileDiagnostic = "Profile has not been opened in this session";
     public static String diagnostics() {
-        return "BD tools 3: profile creation=" + profileCreatedCalls + ", toolbar render=" + toolbarRenderCalls
+        return "BD tools 4: profile creation=" + profileCreatedCalls + ", toolbar render=" + toolbarRenderCalls
                 + "\n" + profileDiagnostic;
     }
     private static WeakReference<Screen> queueOrigin = new WeakReference<>(null);
@@ -190,6 +191,7 @@ public final class BatchDownloadManager {
     public static void detach(View root) {
         Screen screen = SCREENS.remove(root);
         if (screen == null) return;
+        TOOLBAR_SCREENS.values().removeIf(ref -> ref.get() == null || ref.get() == screen);
         screen.discovery++; screen.selection.clear(); screen.selecting = false;
         Button toolbar = screen.toolbarButton.get();
         if (toolbar != null && toolbar.getParent() instanceof ViewGroup) ((ViewGroup) toolbar.getParent()).removeView(toolbar);
@@ -312,6 +314,11 @@ public final class BatchDownloadManager {
                 container.setVisibility(View.VISIBLE);
                 bd.setVisibility(View.VISIBLE);
                 bd.setOnClickListener(v -> {
+                    WeakReference<Screen> registered = TOOLBAR_SCREENS.get(nativeBar);
+                    Screen associated = registered == null ? null : registered.get();
+                    if (associated != null && SCREENS.containsValue(associated)) {
+                        associated.mode.performClick(); return;
+                    }
                     for (Screen screen : SCREENS.values()) {
                         if (!screen.profile) continue;
                         Object fragment = screen.source.get();
@@ -322,7 +329,7 @@ public final class BatchDownloadManager {
                             if (field.get(fragment) == nativeBar) { screen.mode.performClick(); return; }
                         } catch (Exception ignored) { }
                     }
-                    profileDiagnostic = "Toolbar available, but profile selection screen was not registered";
+                    profileDiagnostic = "Profile registration failed (creation=" + profileCreatedCalls + "): " + profileDiagnostic + "";
                     Utils.showToastLong(profileDiagnostic);
                 });
                 bd.setOnLongClickListener(v -> { DownloadQueueDialog.show(v.getContext()); return true; });
@@ -361,6 +368,7 @@ public final class BatchDownloadManager {
             field.setAccessible(true);
             Object bar = field.get(source);
             if (!(bar instanceof View)) return;
+            TOOLBAR_SCREENS.put((View) bar, new WeakReference<>(screen));
             int id = app.morphe.extension.shared.ResourceUtils.getIdentifier(root.getContext(), app.morphe.extension.shared.ResourceType.ID, "right_action_bar_buttons");
             View container = id == 0 ? null : ((View) bar).findViewById(id);
             if (!(container instanceof LinearLayout)) return;
