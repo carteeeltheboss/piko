@@ -99,7 +99,16 @@ public class MediaDownloader {
         });
     }
 
-    private void runDownloadTask(DownloadRequest request) {
+    /** Blocking entry point for coordinators. Call only from a worker thread. */
+    public boolean downloadBlocking(DownloadRequest request) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            throw new IllegalStateException("Downloads require a worker thread");
+        }
+        if (!StorageUtils.checkStoragePermissions()) return false;
+        return runDownloadTask(request);
+    }
+
+    private boolean runDownloadTask(DownloadRequest request) {
         int notificationId = (int) System.currentTimeMillis();
         Uri outputDocumentUri = null;
         boolean downloadCompleted = false;
@@ -124,14 +133,14 @@ public class MediaDownloader {
                 if (request.conflictPolicy != DownloadRequest.ConflictPolicy.RENAME
                         && ACTIVE_DESTINATIONS.contains(requestedDestination)) {
                     showToast(ExtensionStrings.DOWNLOAD_MEDIA_IN_PROGRESS);
-                    return;
+                    return false;
                 }
                 Map<String, Uri> children = getChildDocuments(targetDirectoryUri);
                 Uri existing = request.conflictPolicy == DownloadRequest.ConflictPolicy.RENAME ? null
                         : children.get(request.fileName);
                 if (existing != null && request.conflictPolicy == DownloadRequest.ConflictPolicy.SKIP) {
                     showToast(ExtensionStrings.DOWNLOAD_MEDIA_EXISTS);
-                    return;
+                    return true;
                 }
                 replacing = existing != null && request.conflictPolicy == DownloadRequest.ConflictPolicy.OVERWRITE;
                 if (replacing) {
@@ -205,6 +214,7 @@ public class MediaDownloader {
             }
             if (replacement != null) replacement.delete();
         }
+        return downloadCompleted;
     }
 
     private void replaceDocument(File replacement, Uri destination) throws IOException {

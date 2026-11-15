@@ -336,6 +336,10 @@ public class DownloadUtils {
             Utils.showToastShort(str("piko_no_internet"));
             return;
         }
+        getDownloadAllDownloader(context).enqueueBatch(buildSelectedRequests(group, indexes));
+    }
+
+    private static List<DownloadRequest> buildSelectedRequests(DownloadMediaGroup group, List<Integer> indexes) throws Exception {
         int total = group.size();
         String username = group.username();
         String subFolder = getSubfolderName(username);
@@ -347,7 +351,28 @@ public class DownloadUtils {
             requests.add(buildMediaRequest(root, child, group.carouselParent == null ? 0 : index, index, MediaType.ANY, child.getMediaLink(),
                     subFolder, username + "_" + child.getDownloadFilename(MediaType.ANY), null));
         }
-        getDownloadAllDownloader(context).enqueueBatch(requests);
+        return requests;
+    }
+
+    /** Uses exactly the same carousel expansion, quality and filename policy as Download all.
+     * The worker owns the downloader and cancellation only skips work not yet started. */
+    public static boolean downloadCompletePost(MediaDownloader downloader, MediaData post,
+                                               java.util.function.BooleanSupplier cancelled,
+                                               Set<String> completed) throws Exception {
+        DownloadMediaGroup group = DownloadMediaGroup.carousel(post);
+        List<Integer> indexes = new ArrayList<>();
+        for (int i = 0; i < group.size(); i++) indexes.add(i);
+        List<DownloadRequest> requests = buildSelectedRequests(group, indexes);
+        if (requests.isEmpty()) throw new IllegalStateException("Post has no media");
+        boolean success = true;
+        for (DownloadRequest request : requests) {
+            if (cancelled.getAsBoolean()) return false;
+            String key = request.url;
+            if (completed.contains(key)) continue;
+            if (downloader.downloadBlocking(request)) completed.add(key);
+            else success = false;
+        }
+        return success;
     }
 
     // Position is set to -1 if we want to download all medias from the media info object.
