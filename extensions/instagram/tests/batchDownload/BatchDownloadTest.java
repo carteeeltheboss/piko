@@ -21,6 +21,14 @@ public final class BatchDownloadTest {
         check(snapshot.size() == 2 && selection.size() == 0);
         check(selection.toggle("123", "rebound post"));
         check(!selection.toggle("123", "rebound post")); check(selection.size() == 0);
+        SelectionManager<String> profile = new SelectionManager<>();
+        selection.select("offscreen", "loaded but never bound");
+        selection.select("offscreen", "same post pinned twice");
+        selection.select("new-page", "loaded after scrolling");
+        selection.select("0", "unavailable");
+        check(selection.size() == 2 && profile.size() == 0);
+        check(!selection.toggle("offscreen", "manual deselect"));
+        check(selection.size() == 1); selection.clear(); check(selection.size() == 0);
         Deferred executor = new Deferred(); List<String> calls = new ArrayList<>();
         BatchDownloadQueue<String> queue = new BatchDownloadQueue<>(executor, (item, cancelled) -> {
             calls.add(item); if (item.equals("bad")) throw new IllegalStateException("Unavailable"); return true;

@@ -47,14 +47,15 @@ val savedPostsBatchDownloadPatch = patch(
         val session = owner.fields.singleOrNull { it.type == SESSION }
             ?: throw PatchException("Expected one Saved screen session field")
         SavedViewCreated.method.apply {
-            if (p0Register < 2) throw PatchException("Saved view hook needs two local registers")
+            if (p0Register < 3) throw PatchException("Saved view hook needs three local registers")
             implementation!!.instructions.withIndex().filter { it.value.opcode == Opcode.RETURN_VOID }
                 .map { it.index }.reversed().forEach { index ->
                     addInstructions(index, """
                         move-object/from16 v0, p0
                         iget-object v1, v0, $session
                         move-object/from16 v0, p1
-                        invoke-static {v0, v1}, $HOOK->attach(Landroid/view/View;$SESSION)V
+                        move-object/from16 v2, p0
+                        invoke-static {v0, v1, v2}, $HOOK->attach(Landroid/view/View;${SESSION}Ljava/lang/Object;)V
                     """.trimIndent())
                 }
         }

@@ -13,6 +13,9 @@ public final class SelectionManager<T> {
         selected.put(id, item);
         return true;
     }
+    public void select(String id, T item) {
+        if (id != null && !id.isEmpty() && !"0".equals(id) && item != null) selected.put(id, item);
+    }
     public boolean contains(String id) { return selected.containsKey(id); }
     public int size() { return selected.size(); }
     public void clear() { selected.clear(); }

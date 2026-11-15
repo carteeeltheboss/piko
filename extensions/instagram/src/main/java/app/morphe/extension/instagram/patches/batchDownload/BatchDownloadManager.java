@@ -45,6 +45,9 @@ public final class BatchDownloadManager {
         final UserSession session;
         final LinearLayout bar;
         final Button mode, download, cancel, retry;
+        Button all, none;
+        WeakReference<Object> source;
+        int discovery;
         final TextView count;
         boolean selecting;
         Screen(View root, UserSession session, LinearLayout bar, Button mode, Button download,
@@ -89,7 +92,7 @@ public final class BatchDownloadManager {
     private static Button button(Context context, String text) {
         Button b = new Button(context); b.setText(text); b.setTextSize(12); b.setMinWidth(0); return b;
     }
-    public static void attach(View root, UserSession session) {
+    public static void attach(View root, UserSession session, Object source) {
         try {
             if (!(root instanceof ViewGroup) || session == null || SCREENS.containsKey(root)) return;
             Context context = root.getContext();
@@ -105,9 +108,19 @@ public final class BatchDownloadManager {
             }
             if (!(host instanceof FrameLayout)) return;
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
-            ((FrameLayout) host).addView(bar, params);
+            LinearLayout panel = new LinearLayout(context); panel.setOrientation(LinearLayout.VERTICAL);
+            panel.addView(bar);
+            LinearLayout actions = new LinearLayout(context);
+            Button all = button(context, "Select All Loaded"), none = button(context, "Deselect All");
+            actions.addView(all, new LinearLayout.LayoutParams(0, -2, 1));
+            actions.addView(none, new LinearLayout.LayoutParams(0, -2, 1));
+            panel.addView(actions); actions.setTag("batchSelectionActions");
+            ((FrameLayout) host).addView(panel, params);
             Screen screen = new Screen(root, session, bar, mode, download, cancel, retry, count);
+            screen.source = new WeakReference<>(source); screen.all = all; screen.none = none;
             SCREENS.put(root, screen);
+            all.setOnClickListener(v -> selectLoaded(screen));
+            none.setOnClickListener(v -> { screen.discovery++; screen.selection.clear(); refresh(screen); });
             if (queue == null) {
                 MediaDownloader downloader = new MediaDownloader(context.getApplicationContext());
                 Map<MediaData, java.util.Set<String>> completed = new WeakHashMap<>();
@@ -117,7 +130,7 @@ public final class BatchDownloadManager {
             }
             mode.setOnClickListener(v -> {
                 screen.selecting = !screen.selecting;
-                if (!screen.selecting) screen.selection.clear();
+                if (!screen.selecting) { screen.discovery++; screen.selection.clear(); }
                 refresh(screen);
             });
             download.setOnClickListener(v -> start(screen, screen.selection.snapshot()));
@@ -130,19 +143,47 @@ public final class BatchDownloadManager {
     public static void detach(View root) {
         Screen screen = SCREENS.remove(root);
         if (screen == null) return;
-        screen.selection.clear(); screen.selecting = false;
-        if (screen.bar.getParent() instanceof ViewGroup) ((ViewGroup) screen.bar.getParent()).removeView(screen.bar);
+        screen.discovery++; screen.selection.clear(); screen.selecting = false;
+        View panel = (View) screen.bar.getParent();
+        if (panel != null && panel.getParent() instanceof ViewGroup) ((ViewGroup) panel.getParent()).removeView(panel);
         for (Cell cell : CELLS.values()) if (cell.screen.get() == screen) cell.update();
         // An explicitly started batch continues using application context after navigation.
     }
     private static void refresh(Screen screen) {
         screen.mode.setText(screen.selecting ? "Done" : "BD");
+        screen.all.setVisibility(screen.selecting ? View.VISIBLE : View.GONE);
+        screen.none.setVisibility(screen.selecting ? View.VISIBLE : View.GONE);
         screen.count.setText(screen.selection.size() + " selected");
         screen.download.setVisibility(screen.selecting ? View.VISIBLE : View.GONE);
         screen.download.setEnabled(screen.selection.size() > 0 && !queue.isRunning());
         screen.cancel.setVisibility(queue.isRunning() ? View.VISIBLE : View.GONE);
         screen.retry.setVisibility(!queue.isRunning() && !queue.failedItems().isEmpty() ? View.VISIBLE : View.GONE);
         for (Cell cell : CELLS.values()) if (cell.screen.get() == screen) cell.update();
+    }
+    private static void selectLoaded(Screen screen) {
+        Object source = screen.source.get();
+        if (source == null) return;
+        try {
+            java.util.List<Object> loaded = LoadedPosts.saved(source, screen.session);
+            int generation = ++screen.discovery;
+            addLoaded(screen, loaded, 0, generation);
+        } catch (Exception | LinkageError e) {
+            Logger.printException(() -> "BD could not read loaded posts", e);
+            Utils.showToastShort("Could not read loaded posts; individual selection is still available");
+        }
+    }
+    private static void addLoaded(Screen screen, java.util.List<Object> loaded, int offset, int generation) {
+        if (screen.discovery != generation || !screen.selecting || !SCREENS.containsValue(screen)) return;
+        int end = Math.min(offset + 40, loaded.size());
+        for (int i = offset; i < end; i++) {
+            MediaData post = new MediaData(loaded.get(i), screen.session);
+            screen.selection.select(post.getPostID(), post);
+        }
+        refresh(screen);
+        if (end < loaded.size()) {
+            View root = screen.root.get();
+            if (root != null) root.postOnAnimation(() -> addLoaded(screen, loaded, end, generation));
+        } else Utils.showToastShort(screen.selection.size() + " selected from loaded posts; scroll and repeat for more");
     }
     private static void start(Screen screen, Map<String, MediaData> items) {
         if (!StorageUtils.checkStoragePermissions()) { StorageUtils.allowStorageAccess(); return; }
