@@ -851,7 +851,20 @@ public class ScreenBuilder {
         }
     }
 
+    private void addDownloadQueuePreference() {
+        Preference queue = helper.buttonPreference("Download Queue",
+                "BD tools 3 - Live requests, file progress and failures", "piko_download_queue");
+        queue.setPersistent(false);
+        queue.setOrder(-100);
+        queue.setOnPreferenceClickListener(preference -> {
+            app.morphe.extension.instagram.patches.batchDownload.DownloadQueueDialog.show(context);
+            return true;
+        });
+        addPreference(queue);
+    }
+
     public void buildDownloadSection() {
+        addDownloadQueuePreference();
         if (!SettingsStatus.downloadSection()) return;
 
         // PreferenceCategory category= addCategory(str("piko_category_download_media"));
@@ -1250,16 +1263,7 @@ public class ScreenBuilder {
     }
 
     public void buildSettingsPage() {
-        if (SettingsStatus.downloadMedia) {
-            Preference queue = new Preference(context);
-            queue.setTitle("Download Queue");
-            queue.setSummary("Live progress, pending requests, completed files and failure details");
-            queue.setOnPreferenceClickListener(preference -> {
-                app.morphe.extension.instagram.patches.batchDownload.DownloadQueueDialog.show(context);
-                return true;
-            });
-            addPreference(queue);
-        }
+        addDownloadQueuePreference();
         if (SettingsStatus.adsSection()){
             addPreference(
                     helper.categoryPreference(

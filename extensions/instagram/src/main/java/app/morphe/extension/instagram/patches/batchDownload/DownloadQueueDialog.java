@@ -66,6 +66,7 @@ public final class DownloadQueueDialog {
                     for (Map.Entry<String, String> post : posts.entrySet()) text.append(post.getValue()).append("  ").append(post.getKey()).append('\n');
                 }
                 summary.setText("Files: " + pending + " pending · " + active + " active · " + complete + " completed · " + failed + " failed\nOne file at a time. Active files finish when pending work is cancelled.\n");
+                text.append("\n").append(BatchDownloadManager.diagnostics()).append("\nHistory is for this app session.\n");
                 rows.setText(text.length() == 0 ? "No downloads recorded in this app session." : text.toString());
                 handler.postDelayed(this, 1000);
             }

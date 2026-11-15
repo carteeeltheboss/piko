@@ -9,7 +9,7 @@ public class AuditCombined {
    var dex=DexBackedDexFile.fromInputStream(Opcodes.getDefault(),new BufferedInputStream(z.getInputStream(e)));
    for(var c:dex.getClasses())for(var m:c.getMethods()) {
     var impl=m.getImplementation();if(impl==null)continue;
-    if(!(c.getType().equals("LX/0DNO;")||c.getType().contains("UserDetailFragment;")||c.getType().equals("LX/0RLB;")||c.getType().contains("instagram/settings/SettingsStatus;")||c.getType().contains("instagram/settings/preference/ScreenBuilder;")))continue;
+    if(!(c.getType().equals("LX/0DNO;")||c.getType().equals("Lcom/instagram/profile/actionbar/ProfileActionBar;")||c.getType().contains("UserDetailFragment;")||c.getType().equals("LX/0RLB;")||c.getType().contains("instagram/settings/SettingsStatus;")||c.getType().contains("instagram/settings/preference/ScreenBuilder;")))continue;
     for(var i:impl.getInstructions())if(i instanceof ReferenceInstruction r && r.getReference() instanceof MethodReference ref){
      if(ref.getDefiningClass().contains("batchDownload/BatchDownloadManager;")){hooks.add(c.getType()+" "+m.getName()+" -> "+ref.getName());if(ref.getName().equals("bind"))binds++;if(ref.getName().equals("profileClick"))profileClicks++;}
      if(ref.getDefiningClass().contains("downloader/MediaDownloader;")&&ref.getName().equals("enableInstagramQueue"))queueEnable++;
@@ -22,7 +22,7 @@ public class AuditCombined {
   System.out.println("SETTINGS_FLAGS "+settings);
   if(binds!=1||profileClicks!=1||!settings.containsAll(Arrays.asList("viewStoriesAnonymously","viewLiveAnonymously","disableAds","downloadMedia")))throw new AssertionError("Missing/duplicate grid hook or original settings initialization");
   if(hooks.stream().noneMatch(s->s.contains("-> attachProfile"))||hooks.stream().noneMatch(s->s.contains("-> attach")))throw new AssertionError("Missing screen hook");
-  if(queueEnable!=1||queueUI<1||hooks.stream().noneMatch(s->s.contains("AeX -> profileToolbar")))throw new AssertionError("Missing queue settings or profile toolbar hook");
+  if(queueEnable!=1||queueUI<1||hooks.stream().noneMatch(s->s.contains("AeX -> profileToolbar"))||hooks.stream().noneMatch(s->s.contains("A00 -> toolbarRendered")))throw new AssertionError("Missing queue settings or profile toolbar hook");
   System.out.println("PASS: one shared grid binder, one profile listener wrapper, both lifecycle hooks, original settings initialization");
  }
 }

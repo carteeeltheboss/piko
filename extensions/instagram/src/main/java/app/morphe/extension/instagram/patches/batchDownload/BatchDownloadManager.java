@@ -39,6 +39,12 @@ public final class BatchDownloadManager {
         }
     };
     private static BatchDownloadQueue<MediaData> queue;
+    private static int profileCreatedCalls, toolbarRenderCalls;
+    private static String profileDiagnostic = "Profile has not been opened in this session";
+    public static String diagnostics() {
+        return "BD tools 3: profile creation=" + profileCreatedCalls + ", toolbar render=" + toolbarRenderCalls
+                + "\n" + profileDiagnostic;
+    }
     private static WeakReference<Screen> queueOrigin = new WeakReference<>(null);
     private static String queueProfileId;
 
@@ -111,6 +117,7 @@ public final class BatchDownloadManager {
         attachScreen(root, session, source, false);
     }
     public static void attachProfile(View root, UserSession session, Object fragment) {
+        profileCreatedCalls++;
         attachScreen(root, session, fragment, true);
     }
     private static void attachScreen(View root, UserSession session, Object source, boolean profile) {
@@ -175,7 +182,10 @@ public final class BatchDownloadManager {
                 root.post(() -> mountProfile(screen));
             }
             for (Map.Entry<View, Object> entry : BOUND.entrySet()) render(entry.getKey(), entry.getValue());
-        } catch (Exception | LinkageError e) { Logger.printException(() -> "Saved BD attach failed", e); }
+        } catch (Exception | LinkageError e) {
+            if (profile) profileDiagnostic = "Profile screen attachment failed: " + e.getClass().getSimpleName();
+            Logger.printException(() -> "BD screen attach failed", e);
+        }
     }
     public static void detach(View root) {
         Screen screen = SCREENS.remove(root);
@@ -276,6 +286,53 @@ public final class BatchDownloadManager {
         }
         return null;
     }
+    /** Native ProfileActionBar.A00 has finished installing its menu buttons. */
+    public static void toolbarRendered(View nativeBar) {
+        toolbarRenderCalls++;
+        nativeBar.post(() -> {
+            try {
+                int id = app.morphe.extension.shared.ResourceUtils.getIdentifier(nativeBar.getContext(),
+                        app.morphe.extension.shared.ResourceType.ID, "right_action_bar_buttons");
+                View found = id == 0 ? null : nativeBar.findViewById(id);
+                if (!(found instanceof LinearLayout)) {
+                    profileDiagnostic = "Toolbar rendered, but right button container unavailable";
+                    return;
+                }
+                LinearLayout container = (LinearLayout) found;
+                Button bd = container.findViewWithTag("piko_profile_batch_download");
+                if (bd == null) {
+                    bd = button(nativeBar.getContext(), "BD");
+                    bd.setTag("piko_profile_batch_download");
+                    bd.setTextColor(0xFF0095F6); bd.setBackgroundColor(Color.TRANSPARENT);
+                    bd.setPadding(0, 0, 0, 0); bd.setMinimumWidth(0); bd.setMinimumHeight(0);
+                    bd.setContentDescription("Profile Batch Download");
+                    int size = (int) (48 * nativeBar.getResources().getDisplayMetrics().density);
+                    container.addView(bd, Math.max(0, container.getChildCount()-1), new LinearLayout.LayoutParams(size, size));
+                }
+                container.setVisibility(View.VISIBLE);
+                bd.setVisibility(View.VISIBLE);
+                bd.setOnClickListener(v -> {
+                    for (Screen screen : SCREENS.values()) {
+                        if (!screen.profile) continue;
+                        Object fragment = screen.source.get();
+                        if (fragment == null) continue;
+                        try {
+                            java.lang.reflect.Field field = Class.forName("com.instagram.profile.fragment.UserDetailFragment").getDeclaredField("A0K");
+                            field.setAccessible(true);
+                            if (field.get(fragment) == nativeBar) { screen.mode.performClick(); return; }
+                        } catch (Exception ignored) { }
+                    }
+                    profileDiagnostic = "Toolbar available, but profile selection screen was not registered";
+                    Utils.showToastLong(profileDiagnostic);
+                });
+                bd.setOnLongClickListener(v -> { DownloadQueueDialog.show(v.getContext()); return true; });
+                profileDiagnostic = "BD installed in native profile toolbar (" + container.getChildCount() + " buttons)";
+            } catch (Exception | LinkageError e) {
+                profileDiagnostic = "Toolbar installation failed: " + e.getClass().getSimpleName();
+                Logger.printException(() -> "Profile BD native toolbar failed", e);
+            }
+        });
+    }
     /** Called after native configureActionBar as well as profile-view creation. */
     public static void profileToolbar(Object fragment) {
         try {
@@ -300,7 +357,7 @@ public final class BatchDownloadManager {
             screen.panel.setVisibility(screen.selecting && root.isShown() ? View.VISIBLE : View.GONE);
             Object source = screen.source.get();
             if (source == null) return;
-            java.lang.reflect.Field field = source.getClass().getDeclaredField("A0K");
+            java.lang.reflect.Field field = Class.forName("com.instagram.profile.fragment.UserDetailFragment").getDeclaredField("A0K");
             field.setAccessible(true);
             Object bar = field.get(source);
             if (!(bar instanceof View)) return;

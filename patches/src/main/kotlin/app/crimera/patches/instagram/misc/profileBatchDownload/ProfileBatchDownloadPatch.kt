@@ -27,6 +27,11 @@ private object ProfileConfigureActionBar : Fingerprint(
     strings = listOf("UserDetailFragment.configureActionBar"),
 )
 
+private object NativeProfileToolbar : Fingerprint(
+    definingClass = "Lcom/instagram/profile/actionbar/ProfileActionBar;", name = "A00", returnType = "V",
+    strings = listOf("userSession", "activity"),
+)
+
 @Suppress("unused")
 val profileBatchDownloadPatch = patch(
     name = "Profile Batch Downloader",
@@ -35,6 +40,12 @@ val profileBatchDownloadPatch = patch(
     compatibleWith(COMPATIBILITY_INSTAGRAM)
     dependsOn(batchGridHooksPatch)
     execute {
+        NativeProfileToolbar.method.apply {
+            implementation!!.instructions.withIndex().filter { it.value.opcode == Opcode.RETURN_VOID }
+                .map { it.index }.reversed().forEach { index ->
+                    addInstructions(index, "invoke-static/range {p0 .. p0}, $HOOK->toolbarRendered(Landroid/view/View;)V")
+                }
+        }
         ProfileCreated.method.apply {
             if (p0Register < 3) throw PatchException("Profile attach requires three local registers")
             implementation!!.instructions.withIndex().filter { it.value.opcode == Opcode.RETURN_VOID }
