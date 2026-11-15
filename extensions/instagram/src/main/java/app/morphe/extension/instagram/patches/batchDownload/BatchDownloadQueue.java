@@ -13,6 +13,7 @@ public final class BatchDownloadQueue<T> {
     private final Worker<T> worker;
     private volatile boolean cancelled;
     private boolean running;
+    private final LinkedHashMap<String, String> states = new LinkedHashMap<>();
     private Map<String, T> failures = new LinkedHashMap<>();
 
     public BatchDownloadQueue(Executor executor, Worker<T> worker) {
@@ -25,11 +26,17 @@ public final class BatchDownloadQueue<T> {
         running = true;
         cancelled = false;
         failures.clear();
+        states.clear();
+        for (String id : batch.keySet()) states.put(id, "PENDING");
         try { executor.execute(() -> run(batch, listener)); }
         catch (RuntimeException e) { running = false; throw e; }
         return true;
     }
-    public void cancel() { cancelled = true; }
+    public synchronized Map<String, String> states() { return new LinkedHashMap<>(states); }
+    public synchronized void cancel() {
+        cancelled = true;
+        states.replaceAll((id, state) -> "PENDING".equals(state) ? "CANCELLED" : state);
+    }
     public synchronized boolean isRunning() { return running; }
     public synchronized Map<String, T> failedItems() { return new LinkedHashMap<>(failures); }
     private void report(Listener listener, int done, int failed, int total, String active, boolean busy) {
@@ -40,7 +47,10 @@ public final class BatchDownloadQueue<T> {
         int done = 0, failed = 0;
         try {
             for (Map.Entry<String, T> entry : items.entrySet()) {
-                if (cancelled) break;
+                synchronized (this) {
+                    if (cancelled) break;
+                    states.put(entry.getKey(), "ACTIVE");
+                }
                 report(listener, done, failed, items.size(), entry.getKey(), true);
                 boolean success;
                 try { success = worker.download(entry.getValue(), () -> cancelled); }
@@ -49,11 +59,15 @@ public final class BatchDownloadQueue<T> {
                     synchronized (this) { failures.put(entry.getKey(), entry.getValue()); }
                     failed++;
                 }
+                synchronized (this) { states.put(entry.getKey(), success ? "COMPLETED" : "FAILED"); }
                 done++;
                 report(listener, done, failed, items.size(), null, true);
             }
         } finally {
-            synchronized (this) { running = false; }
+            synchronized (this) {
+                running = false;
+                states.replaceAll((id, state) -> "PENDING".equals(state) ? "CANCELLED" : state);
+            }
             report(listener, done, failed, items.size(), null, false);
         }
     }

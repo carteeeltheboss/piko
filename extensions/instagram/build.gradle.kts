@@ -17,6 +17,8 @@ dependencies {
 // Android-independent state/queue tests; no emulator or third-party test runtime required.
 val compileBatchDownloadTests by tasks.registering(JavaCompile::class) {
     source("tests/batchDownload/BatchDownloadTest.java")
+    source("tests/batchDownload/DownloadQueueMonitorTest.java")
+    source("../shared/library/src/main/java/app/morphe/extension/crimera/downloader/DownloadQueueMonitor.java")
     source("src/main/java/app/morphe/extension/instagram/patches/batchDownload/SelectionManager.java")
     source("src/main/java/app/morphe/extension/instagram/patches/batchDownload/BatchDownloadQueue.java")
     classpath = files()
@@ -28,4 +30,10 @@ tasks.register<JavaExec>("testBatchDownload") {
     dependsOn(compileBatchDownloadTests)
     classpath = files(compileBatchDownloadTests.flatMap { it.destinationDirectory })
     mainClass.set("BatchDownloadTest")
+}
+
+tasks.register<JavaExec>("testDownloadQueueMonitor") {
+    dependsOn(compileBatchDownloadTests)
+    classpath = files(compileBatchDownloadTests.flatMap { it.destinationDirectory })
+    mainClass.set("DownloadQueueMonitorTest")
 }

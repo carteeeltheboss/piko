@@ -22,6 +22,11 @@ private object ProfileDestroyed : Fingerprint(
     definingClass = PROFILE, name = "onDestroyView", returnType = "V", parameters = emptyList(),
 )
 
+private object ProfileConfigureActionBar : Fingerprint(
+    definingClass = PROFILE, name = "AeX", returnType = "V", parameters = listOf("LX/00KB;"),
+    strings = listOf("UserDetailFragment.configureActionBar"),
+)
+
 @Suppress("unused")
 val profileBatchDownloadPatch = patch(
     name = "Profile Batch Downloader",
@@ -41,6 +46,12 @@ val profileBatchDownloadPatch = patch(
                         move-object/from16 v2, p0
                         invoke-static {v0, v1, v2}, $HOOK->attachProfile(Landroid/view/View;${SESSION}Ljava/lang/Object;)V
                     """.trimIndent())
+                }
+        }
+        ProfileConfigureActionBar.method.apply {
+            implementation!!.instructions.withIndex().filter { it.value.opcode == Opcode.RETURN_VOID }
+                .map { it.index }.reversed().forEach { index ->
+                    addInstructions(index, "invoke-static/range {p0 .. p0}, $HOOK->profileToolbar(Ljava/lang/Object;)V")
                 }
         }
         ProfileDestroyed.method.apply {

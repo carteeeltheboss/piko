@@ -1250,6 +1250,16 @@ public class ScreenBuilder {
     }
 
     public void buildSettingsPage() {
+        if (SettingsStatus.downloadMedia) {
+            Preference queue = new Preference(context);
+            queue.setTitle("Download Queue");
+            queue.setSummary("Live progress, pending requests, completed files and failure details");
+            queue.setOnPreferenceClickListener(preference -> {
+                app.morphe.extension.instagram.patches.batchDownload.DownloadQueueDialog.show(context);
+                return true;
+            });
+            addPreference(queue);
+        }
         if (SettingsStatus.adsSection()){
             addPreference(
                     helper.categoryPreference(

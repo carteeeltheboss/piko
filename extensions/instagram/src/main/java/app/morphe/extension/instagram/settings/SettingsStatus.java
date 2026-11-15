@@ -244,7 +244,7 @@ public class SettingsStatus {
     
     //Download section.
     public static boolean downloadMedia = false;
-    public static void downloadMedia() {downloadMedia = true;}
+    public static void downloadMedia() {downloadMedia = true; app.morphe.extension.crimera.downloader.MediaDownloader.enableInstagramQueue();}
      public static boolean saveMediaCommentButton = false;
     public static void saveMediaCommentButton() {
         saveMediaCommentButton = true;

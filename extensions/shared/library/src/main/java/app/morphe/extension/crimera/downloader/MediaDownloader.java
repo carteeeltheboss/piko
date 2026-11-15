@@ -53,6 +53,33 @@ public class MediaDownloader {
     // Separate downloader instances must reserve names before another request can choose them.
     private static final Object CREATE_DOCUMENT_LOCK = new Object();
     private static final Set<String> ACTIVE_DESTINATIONS = new HashSet<>();
+    private static volatile boolean instagramQueueEnabled;
+    private static final ExecutorService INSTAGRAM_QUEUE = Executors.newSingleThreadExecutor();
+    private static final java.util.Map<String, java.util.concurrent.Future<Boolean>> QUEUED = new java.util.HashMap<>();
+    /** Enabled only inside the Instagram extension process; other apps keep their behavior. */
+    public static void enableInstagramQueue() { instagramQueueEnabled = true; }
+    private java.util.concurrent.Future<Boolean> submitTracked(DownloadRequest request) {
+        String key = request.url + "\n" + request.subFolder + "\n" + request.fileName;
+        synchronized (QUEUED) {
+            java.util.concurrent.Future<Boolean> existing = QUEUED.get(key);
+            if (existing != null) return existing;
+            DownloadQueueMonitor.Entry entry = DownloadQueueMonitor.pending(request.fileName);
+            java.util.concurrent.Future<Boolean> future = INSTAGRAM_QUEUE.submit(() -> {
+                try {
+                    if (!DownloadQueueMonitor.begin(entry)) return false;
+                    boolean success = false;
+                    try {
+                        success = runDownloadTask(request);
+                        return success;
+                    } catch (Exception | LinkageError failure) {
+                        DownloadQueueMonitor.error(failure); return false;
+                    } finally { DownloadQueueMonitor.finish(entry, success); }
+                } finally { synchronized (QUEUED) { QUEUED.remove(key); } }
+            });
+            QUEUED.put(key, future);
+            return future;
+        }
+    }
     private final Context context;
     private final NotificationManager notificationManager;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -92,6 +119,10 @@ public class MediaDownloader {
             StorageUtils.allowStorageAccess();
             return;
         }
+        if (instagramQueueEnabled) {
+            for (DownloadRequest request : batch) submitTracked(request);
+            return;
+        }
         executor.execute(() -> {
             for (DownloadRequest request : batch) {
                 runDownloadTask(request);
@@ -105,6 +136,11 @@ public class MediaDownloader {
             throw new IllegalStateException("Downloads require a worker thread");
         }
         if (!StorageUtils.checkStoragePermissions()) return false;
+        if (instagramQueueEnabled) {
+            try { return submitTracked(request).get(); }
+            catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); return false; }
+            catch (java.util.concurrent.ExecutionException failure) { PikoUtils.logger(failure); return false; }
+        }
         return runDownloadTask(request);
     }
 
@@ -139,6 +175,7 @@ public class MediaDownloader {
                 Uri existing = request.conflictPolicy == DownloadRequest.ConflictPolicy.RENAME ? null
                         : children.get(request.fileName);
                 if (existing != null && request.conflictPolicy == DownloadRequest.ConflictPolicy.SKIP) {
+                    DownloadQueueMonitor.detail("Already exists (skip policy)");
                     showToast(ExtensionStrings.DOWNLOAD_MEDIA_EXISTS);
                     return true;
                 }
@@ -163,6 +200,7 @@ public class MediaDownloader {
             builder.setContentTitle(downloadStartString);
             notificationManager.notify(notificationId, builder.build());
             showToast(downloadStartString);
+            DownloadQueueMonitor.detail("Downloading / processing media");
             if (replacing) {
                 // Finish all network and conversion work before touching the saved file.
                 replacement = File.createTempFile("piko-replacement-", ".tmp", context.getCacheDir());
@@ -171,6 +209,7 @@ public class MediaDownloader {
             } else {
                 downloadSources(request, outputDocumentUri, builder, notificationId);
             }
+            DownloadQueueMonitor.detail("Finalizing file / metadata");
             downloadCompleted = true;
 
             final int finalNotificationId = notificationId;
@@ -196,6 +235,7 @@ public class MediaDownloader {
                 } catch (Exception ignored) {}
             });
         } catch (Exception | LinkageError e) {
+            DownloadQueueMonitor.error(e);
             if (!downloadCompleted && !replacing && outputDocumentUri != null) {
                 try {
                     DocumentsContract.deleteDocument(context.getContentResolver(), outputDocumentUri);
@@ -318,6 +358,8 @@ public class MediaDownloader {
             total += count;
             output.write(buffer, 0, count);
 
+            long progressTime = System.currentTimeMillis();
+            if (progressTime - lastUpdateTime > 200) DownloadQueueMonitor.progress(total, length);
             if (length > 0) {
                 int percent = (int) (total * 100 / length);
                 if (percent >= 100) percent = 99;
@@ -329,7 +371,9 @@ public class MediaDownloader {
                     lastUpdateTime = currentTime;
                 }
             }
+            if (progressTime - lastUpdateTime > 200) lastUpdateTime = progressTime;
         }
+        DownloadQueueMonitor.detail("Finalizing downloaded media");
         output.flush();
     }
 

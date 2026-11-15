@@ -37,12 +37,15 @@ public final class BatchDownloadTest {
         posts.put("1", "photo"); posts.put("1", "photo"); posts.put("2", "bad"); posts.put("3", "mixed carousel");
         List<String> progress = new ArrayList<>();
         check(queue.start(posts, (done, failed, total, active, running) -> progress.add(done+":"+failed+":"+running)));
+        check(queue.states().size() == 3 && queue.states().values().stream().allMatch("PENDING"::equals));
         check(!queue.start(posts, (a,b,c,d,e) -> {}));
         executor.run(); check(calls.equals(Arrays.asList("photo", "bad", "mixed carousel")));
+        check("FAILED".equals(queue.states().get("2")) && "COMPLETED".equals(queue.states().get("3")));
         check(queue.failedItems().size() == 1 && queue.failedItems().containsKey("2"));
         check(progress.get(progress.size()-1).equals("3:1:false")); check(!queue.isRunning());
         calls.clear(); check(queue.start(posts, (a,b,c,d,e) -> { throw new RuntimeException(); }));
         queue.cancel(); executor.run(); check(calls.isEmpty() && !queue.isRunning());
+        check(queue.states().values().stream().allMatch("CANCELLED"::equals));
         final BatchDownloadQueue<String>[] holder = new BatchDownloadQueue[1];
         calls.clear(); holder[0] = new BatchDownloadQueue<>(executor, (item, cancelled) -> {
             calls.add(item); holder[0].cancel(); return true;

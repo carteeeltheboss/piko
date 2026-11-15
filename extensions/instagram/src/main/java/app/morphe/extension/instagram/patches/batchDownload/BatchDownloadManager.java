@@ -42,6 +42,13 @@ public final class BatchDownloadManager {
     private static WeakReference<Screen> queueOrigin = new WeakReference<>(null);
     private static String queueProfileId;
 
+    public static Map<String, String> queueStates() {
+        return queue == null ? java.util.Collections.emptyMap() : queue.states();
+    }
+    public static void cancelDownloads() {
+        if (queue != null) queue.cancel();
+        app.morphe.extension.crimera.downloader.DownloadQueueMonitor.cancelPending();
+    }
     private static final class Screen {
         final SelectionManager<MediaData> selection = new SelectionManager<>();
         final WeakReference<View> root;
@@ -53,6 +60,9 @@ public final class BatchDownloadManager {
         int discovery;
         boolean profile;
         String profileId;
+        LinearLayout panel;
+        WeakReference<Button> toolbarButton = new WeakReference<>(null);
+        android.view.ViewTreeObserver.OnGlobalLayoutListener profileLayout;
         final TextView count;
         boolean selecting;
         Screen(View root, UserSession session, LinearLayout bar, Button mode, Button download,
@@ -117,7 +127,7 @@ public final class BatchDownloadManager {
             while (!(host instanceof FrameLayout) && host.getParent() instanceof View) {
                 host = (View) host.getParent();
             }
-            if (!(host instanceof FrameLayout)) return;
+            if (!(host instanceof FrameLayout) && !profile) return;
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
             LinearLayout panel = new LinearLayout(context); panel.setOrientation(LinearLayout.VERTICAL);
             panel.addView(bar);
@@ -126,8 +136,9 @@ public final class BatchDownloadManager {
             actions.addView(all, new LinearLayout.LayoutParams(0, -2, 1));
             actions.addView(none, new LinearLayout.LayoutParams(0, -2, 1));
             panel.addView(actions); actions.setTag("batchSelectionActions");
-            ((FrameLayout) host).addView(panel, params);
+            if (host instanceof FrameLayout) ((FrameLayout) host).addView(panel, params);
             Screen screen = new Screen(root, session, bar, mode, download, cancel, retry, count);
+            screen.panel = panel;
             screen.source = new WeakReference<>(source); screen.profile = profile; screen.all = all; screen.none = none;
             SCREENS.put(root, screen);
             all.setOnClickListener(v -> selectLoaded(screen));
@@ -154,6 +165,15 @@ public final class BatchDownloadManager {
                 }
             });
             refresh(screen);
+            if (profile) {
+                screen.profileLayout = () -> mountProfile(screen);
+                root.getViewTreeObserver().addOnGlobalLayoutListener(screen.profileLayout);
+                root.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+                    public void onViewAttachedToWindow(View v) { mountProfile(screen); }
+                    public void onViewDetachedFromWindow(View v) { screen.panel.setVisibility(View.GONE); }
+                });
+                root.post(() -> mountProfile(screen));
+            }
             for (Map.Entry<View, Object> entry : BOUND.entrySet()) render(entry.getKey(), entry.getValue());
         } catch (Exception | LinkageError e) { Logger.printException(() -> "Saved BD attach failed", e); }
     }
@@ -161,6 +181,9 @@ public final class BatchDownloadManager {
         Screen screen = SCREENS.remove(root);
         if (screen == null) return;
         screen.discovery++; screen.selection.clear(); screen.selecting = false;
+        Button toolbar = screen.toolbarButton.get();
+        if (toolbar != null && toolbar.getParent() instanceof ViewGroup) ((ViewGroup) toolbar.getParent()).removeView(toolbar);
+        if (screen.profileLayout != null && root.getViewTreeObserver().isAlive()) root.getViewTreeObserver().removeOnGlobalLayoutListener(screen.profileLayout);
         View panel = (View) screen.bar.getParent();
         if (panel != null && panel.getParent() instanceof ViewGroup) ((ViewGroup) panel.getParent()).removeView(panel);
         for (WeakReference<Cell> ref : CELLS.values()) {
@@ -170,6 +193,12 @@ public final class BatchDownloadManager {
     }
     private static void refresh(Screen screen) {
         screen.mode.setText(screen.selecting ? "Done" : "BD");
+        if (screen.profile) {
+            View root = screen.root.get();
+            screen.panel.setVisibility(screen.selecting && root != null && root.isShown() ? View.VISIBLE : View.GONE);
+            Button toolbar = screen.toolbarButton.get();
+            if (toolbar != null) toolbar.setText(screen.selecting ? "Done" : "BD");
+        }
         screen.all.setVisibility(screen.selecting ? View.VISIBLE : View.GONE);
         screen.none.setVisibility(screen.selecting ? View.VISIBLE : View.GONE);
         screen.count.setText(screen.selection.size() + " selected");
@@ -246,6 +275,56 @@ public final class BatchDownloadManager {
             ViewParent parent = node.getParent(); node = parent instanceof View ? (View) parent : null;
         }
         return null;
+    }
+    /** Called after native configureActionBar as well as profile-view creation. */
+    public static void profileToolbar(Object fragment) {
+        try {
+            View root = (View) fragment.getClass().getMethod("getView").invoke(fragment);
+            if (root == null) return;
+            UserSession session = (UserSession) fragment.getClass().getMethod("getSession").invoke(fragment);
+            attachProfile(root, session, fragment);
+            Screen screen = SCREENS.get(root);
+            if (screen != null) root.post(() -> mountProfile(screen));
+        } catch (Exception | LinkageError e) { Logger.printException(() -> "Profile BD toolbar hook failed", e); }
+    }
+    private static void mountProfile(Screen screen) {
+        View root = screen.root.get();
+        if (root == null || !SCREENS.containsValue(screen) || !root.isAttachedToWindow()) return;
+        try {
+            if (screen.panel.getParent() == null) {
+                View host = root;
+                while (!(host instanceof FrameLayout) && host.getParent() instanceof View) host = (View) host.getParent();
+                if (host instanceof FrameLayout) ((FrameLayout) host).addView(screen.panel,
+                        new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
+            }
+            screen.panel.setVisibility(screen.selecting && root.isShown() ? View.VISIBLE : View.GONE);
+            Object source = screen.source.get();
+            if (source == null) return;
+            java.lang.reflect.Field field = source.getClass().getDeclaredField("A0K");
+            field.setAccessible(true);
+            Object bar = field.get(source);
+            if (!(bar instanceof View)) return;
+            int id = app.morphe.extension.shared.ResourceUtils.getIdentifier(root.getContext(), app.morphe.extension.shared.ResourceType.ID, "right_action_bar_buttons");
+            View container = id == 0 ? null : ((View) bar).findViewById(id);
+            if (!(container instanceof LinearLayout)) return;
+            LinearLayout buttons = (LinearLayout) container;
+            buttons.setVisibility(View.VISIBLE);
+            Button button = buttons.findViewWithTag("piko_profile_batch_download");
+            if (button == null) {
+                button = button(root.getContext(), "BD");
+                button.setTag("piko_profile_batch_download");
+                button.setContentDescription("Profile Batch Download");
+                button.setTextColor(0xFF0095F6); button.setBackgroundColor(Color.TRANSPARENT);
+                button.setPadding(0, 0, 0, 0); button.setMinimumWidth(0); button.setMinimumHeight(0);
+                int size = (int) (48 * root.getResources().getDisplayMetrics().density);
+                buttons.addView(button, Math.max(0, buttons.getChildCount()-1), new LinearLayout.LayoutParams(size, size));
+                button.setOnClickListener(v -> screen.mode.performClick());
+                button.setOnLongClickListener(v -> { DownloadQueueDialog.show(v.getContext()); return true; });
+            }
+            screen.toolbarButton = new WeakReference<>(button);
+            String text = screen.selecting ? "Done" : "BD";
+            if (!text.contentEquals(button.getText())) button.setText(text);
+        } catch (Exception | LinkageError e) { Logger.printException(() -> "Profile BD toolbar attachment failed", e); }
     }
     private static void checkProfile(Screen screen) {
         if (!screen.profile) return;
